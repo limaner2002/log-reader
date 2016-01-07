@@ -1,3 +1,12 @@
+module FreeLog
+    ( runLogReader
+    , createLog
+    , DirPath(..)
+    , FileName(..)
+    , deleteLog
+    , module Control.Monad.State
+    ) where
+
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE DeriveFunctor #-}
@@ -30,7 +39,7 @@ instance Show a => Show (LogFile a b) where
         unwords $ ["LogFile with position", show pos]
 
 data LogDir a = LogDir
-    { nWatchers :: Int
+    { numWatchers :: Int
     , fileMap :: a
     } deriving Show
 
@@ -42,11 +51,12 @@ data LogReaderF a b next
 
 data DirWatcherF a b next
     = AddLog LogKey (LogFile a b) next
-    | CloseLog FileName next
+    | CloseLog LogKey next
     | IncWatchers DirPath next
     | DecWatchers DirPath next
     | CloseDir DirPath next
     | OpenDir DirPath next
+    | GetWatchers DirPath (Maybe a -> next)
     -- | GetFile LogKey (Maybe (LogFile a b) -> next)
       deriving Functor
 
@@ -57,10 +67,10 @@ type DirMap = Map DirPath (LogDir (FileMap AppianLogFile))
 type DirWatcher = Free (DirWatcherF Int Text)
 type LogReader = Free (LogReaderF Int Text)
 type AppianLogFile = LogFile Int Text
-type LogReaderM = StateT DirMap IO
+type LogReaderM = LogReader (StateT DirMap IO ())
 
-runDirTest :: (MonadState DirMap m) => DirWatcher a -> m a
-runDirTest = iterM run
+runDir :: (MonadState DirMap m) => DirWatcher a -> m a
+runDir = iterM run
     where
       run :: (MonadState DirMap m) => DirWatcherF Int Text (m a) -> m a
       run (OpenDir path n) = do
@@ -69,13 +79,17 @@ runDirTest = iterM run
         n
       run (IncWatchers path n) = do
         modify $ M.adjust (\dir ->
-                               dir {nWatchers = (nWatchers dir) + 1}
+                               dir {numWatchers = (numWatchers dir) + 1}
                           ) path
         n
       run (DecWatchers path n) = do
         modify $ M.adjust (\dir ->
-                               dir {nWatchers = (nWatchers dir) - 1}
+                               dir {numWatchers = (numWatchers dir) - 1}
                           ) path
+        mWatchers <- runDir $ getWatchers path
+        case mWatchers of
+          Just 0 -> modify $ M.delete path
+          _ -> return ()
         n
       run (AddLog (path, fName) newLogFile n) = do
         modify $ M.adjust (\dir ->
@@ -83,27 +97,38 @@ runDirTest = iterM run
                                { fileMap = M.insert fName newLogFile (fileMap dir)
                                }
                           ) path
+        runDir $ incWatchers path
         n
-      -- run (GetFile (path, fName) f) = do
-      --   mDir <- gets $ M.lookup path
-      --   case mDir of
-      --     Nothing -> f Nothing
-      --     Just dir ->
-      --         f logFile
-      --       where
-      --         logFile = M.lookup fName (fileMap dir)
+      run (GetWatchers path f) = do
+        logDir <- gets $ M.lookup path
+        let mNWatchers = fmap numWatchers logDir
+        f mNWatchers
+      run (CloseLog (path, fName) n) = do
+        modify $ M.adjust (\dir ->
+                               dir
+                               { fileMap = M.delete fName (fileMap dir)
+                               }
+                          ) path
+        runDir $ decWatchers path
+        n
+      run (CloseDir dirPath n) = do
+        modify $ M.delete dirPath
+        n
 
 runLogReader :: (MonadIO m, MonadState DirMap m) => LogReader a -> m a
 runLogReader = iterM run
     where
       run :: (MonadIO m, MonadState DirMap m) => LogReaderF Int Text (m a) -> m a
-      run (CreateLog path n) = do
+      run (CreateLog (dir, fName) n) = do
         chan <- liftIO newTChanIO
         let newLogFile = LogFile 0 chan :: AppianLogFile
-        runDirTest $ addLog path newLogFile
+        runDir $ do
+          mWatchers <- getWatchers dir
+          case mWatchers of
+            Nothing -> openDir dir
+            Just _ -> return ()
+          addLog (dir, fName) newLogFile
         n
-      -- run (Continue (dir, fName)) next = do
-
-program :: LogReaderM
-program = do
-  
+      run (DeleteLog path n) = do
+        runDir $ closeLog path
+        n
