@@ -1,18 +1,21 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE OverloadedStrings #-}
+
 module FreeLog
     ( runLogReader
     , createLog
     , DirPath(..)
     , FileName(..)
+    , LogReader
     , deleteLog
+    , sendUpdates
     , module Control.Monad.State
     ) where
 
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE DeriveFunctor #-}
-
 import Prelude ()
-import ClassyPrelude.Yesod hiding (FilePath)
+import ClassyPrelude hiding (FilePath)
 
 import Control.Concurrent.STM.TChan
 import Control.Monad.Free
@@ -45,7 +48,7 @@ data LogDir a = LogDir
 
 data LogReaderF a b next
     = CreateLog LogKey next
-    | Continue LogKey next
+    | SendUpdates LogKey next
     | DeleteLog LogKey next
       deriving Functor
 
@@ -57,7 +60,8 @@ data DirWatcherF a b next
     | CloseDir DirPath next
     | OpenDir DirPath next
     | GetWatchers DirPath (Maybe a -> next)
-    -- | GetFile LogKey (Maybe (LogFile a b) -> next)
+    | GetFile LogKey (Maybe (LogFile a b) -> next)
+    | UpdateLog LogKey a next
       deriving Functor
 
 makeFree ''LogReaderF
@@ -114,6 +118,24 @@ runDir = iterM run
       run (CloseDir dirPath n) = do
         modify $ M.delete dirPath
         n
+      run (GetFile (dirPath, fName) f) = do
+        logDir <- gets $ M.lookup dirPath
+        let mFile = logDir >>= (\x -> M.lookup fName (fileMap x))
+        f mFile
+      run (UpdateLog (dirPath, fName) newPos n) = do
+        modify $ M.adjust (\dir ->
+                               dir
+                               { fileMap =
+                                     M.adjust
+                                      (\file ->
+                                           file
+                                           { position = newPos
+                                           }
+                                      ) fName (fileMap dir)
+                               }
+                          ) dirPath
+                               
+        n
 
 runLogReader :: (MonadIO m, MonadState DirMap m) => LogReader a -> m a
 runLogReader = iterM run
@@ -131,4 +153,9 @@ runLogReader = iterM run
         n
       run (DeleteLog path n) = do
         runDir $ closeLog path
+        n
+      run (SendUpdates logKey n) = do
+        file <- runDir $ getFile logKey
+        putStrLn $ unwords ["Sending updates from file", tshow file]
+        runDir $ updateLog logKey 10
         n

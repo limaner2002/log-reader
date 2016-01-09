@@ -57,21 +57,33 @@ multiCreateDeleteAllDifferentDir = do
   deleteLog logKey1
   deleteLog logKey2
 
-runTest test = execStateT (runLogReader test) mempty
+sendTest :: LogReader ()
+sendTest = do
+  createFile
+  sendUpdates logKey1
 
-tests = [ createFile
-        , createDeleteFile
-        , multiCreate
-        , multiCreateOneDelete
-        , multiCreateDeleteAll
-        , createDifferentDir
-        , multiCreateDifferentDir
-        , multiCreateDeleteOneDifferentDir
-        , multiCreateDeleteAllOneDir
-        , multiCreateDeleteAllDifferentDir
+runTest (name, test) = do
+  result <- execStateT (runLogReader test) mempty
+  return (name, result)
+
+tests = [ ("createFile", createFile)
+        , ("createDeleteFile", createDeleteFile)
+        , ("multiCreate", multiCreate)
+        , ("multiCreateOneDelete", multiCreateOneDelete)
+        , ("multiCreateDeleteAll", multiCreateDeleteAll)
+        , ("createDifferentDir", createDifferentDir)
+        , ("multiCreateDifferentDir", multiCreateDifferentDir)
+        , ("multiCreateDeleteOneDifferentDir", multiCreateDeleteOneDifferentDir)
+        , ("multiCreateDeleteAllOneDir", multiCreateDeleteAllOneDir)
+        , ("multiCreateDeleteAllDifferentDir", multiCreateDeleteAllDifferentDir)
+        , ("sendTest", sendTest)
         ]
 
 main :: IO ()
 main = do
   results <- mapM runTest tests
-  mapM_ print results
+  mapM_ (\(name,result) -> do
+           putStrLn name
+           print result
+           putStrLn mempty
+        ) results
