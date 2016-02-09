@@ -34,12 +34,16 @@ type LogKey = (DirPath, FileName)
 
 data LogFile a b = LogFile
     { position :: a
-    , channel :: TChan b
+    , channels :: TChan b
+    , watchers :: Int
     }
 
 instance Show a => Show (LogFile a b) where
-    show (LogFile pos _) =
-        unwords $ ["LogFile with position", show pos]
+    show (LogFile pos channels watchers) =
+        unwords $ [ "LogFile with position", show pos
+                  , "\nWith", show watchers, "people watching"
+                  , "\nand", show (length channels), "channels"
+                  ]
 
 data LogDir a = LogDir
     { numWatchers :: Int
@@ -49,13 +53,13 @@ data LogDir a = LogDir
 data LogReaderF a b next
     = CreateLog LogKey next
     | SendUpdates LogKey next
-    | DeleteLog LogKey next
+    | DeleteLog LogKey (TChan b) next
       deriving Functor
 
 data DirWatcherF a b next
     = AddLog LogKey (LogFile a b) next
-    | CloseLog LogKey next
-    | IncWatchers DirPath next
+    | CloseLog LogKey (TChan b) next
+    | IncWatchers LogKey next
     | DecWatchers DirPath next
     | CloseDir DirPath next
     | OpenDir DirPath next
@@ -78,13 +82,18 @@ runDir = iterM run
     where
       run :: (MonadState DirMap m) => DirWatcherF Int Text (m a) -> m a
       run (OpenDir path n) = do
-        let newLogDir = LogDir 0 mempty
-        modify $ M.insert path newLogDir
+        mWatchers <- runDir $ getWatchers path
+        case mWatchers of
+          Nothing -> do
+            let newLogDir = LogDir 0 mempty
+            modify $ M.insert path newLogDir
+          Just _ -> do
+            return ()
         n
-      run (IncWatchers path n) = do
+      run (IncWatchers (dirPath, fName) n) = do
         modify $ M.adjust (\dir ->
                                dir {numWatchers = (numWatchers dir) + 1}
-                          ) path
+                          ) dirPath
         n
       run (DecWatchers path n) = do
         modify $ M.adjust (\dir ->
@@ -107,10 +116,11 @@ runDir = iterM run
         logDir <- gets $ M.lookup path
         let mNWatchers = fmap numWatchers logDir
         f mNWatchers
-      run (CloseLog (path, fName) n) = do
+      run (CloseLog (path, fName) channel n) = do
         modify $ M.adjust (\dir ->
                                dir
                                { fileMap = M.delete fName (fileMap dir)
+                               , channels = delete channel (channels dir)
                                }
                           ) path
         runDir $ decWatchers path
@@ -134,7 +144,7 @@ runDir = iterM run
                                       ) fName (fileMap dir)
                                }
                           ) dirPath
-                               
+
         n
 
 runLogReader :: (MonadIO m, MonadState DirMap m) => LogReader a -> m a
@@ -142,17 +152,21 @@ runLogReader = iterM run
     where
       run :: (MonadIO m, MonadState DirMap m) => LogReaderF Int Text (m a) -> m a
       run (CreateLog (dir, fName) n) = do
-        chan <- liftIO newTChanIO
-        let newLogFile = LogFile 0 chan :: AppianLogFile
-        runDir $ do
-          mWatchers <- getWatchers dir
-          case mWatchers of
-            Nothing -> openDir dir
-            Just _ -> return ()
-          addLog (dir, fName) newLogFile
+        mFile <- runDir $ getFile (dir, fName)
+        runDir $ openDir dir
+        case mFile of
+          Nothing -> do
+                     chan <- liftIO newBroadcastTChan
+                     let newLogFile = LogFile 0 [chan] 1
+                     runDir $ addLog (dir, fName) newLogFile
+          Just (LogFile pos channel watchers) -> do
+                     runDir $ 
+                     chan <- atomically $ cloneTChan $ unsafeHead channels
+                     return $ LogFile pos (chan : channels) (watchers + 1)
+
         n
-      run (DeleteLog path n) = do
-        runDir $ closeLog path
+      run (DeleteLog path channel n) = do
+        runDir $ closeLog path channel
         n
       run (SendUpdates logKey n) = do
         file <- runDir $ getFile logKey

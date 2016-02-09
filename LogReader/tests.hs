@@ -62,6 +62,11 @@ sendTest = do
   createFile
   sendUpdates logKey1
 
+multiCreateSameFile :: LogReader ()
+multiCreateSameFile = do
+  createLog logKey1
+  createLog logKey1
+
 runTest (name, test) = do
   result <- execStateT (runLogReader test) mempty
   return (name, result)
@@ -77,6 +82,7 @@ tests = [ ("createFile", createFile)
         , ("multiCreateDeleteAllOneDir", multiCreateDeleteAllOneDir)
         , ("multiCreateDeleteAllDifferentDir", multiCreateDeleteAllDifferentDir)
         , ("sendTest", sendTest)
+        , ("multiCreateSameFile", multiCreateSameFile)
         ]
 
 main :: IO ()
