@@ -42,12 +42,8 @@ library
     build-depends: base
                  , yesod
                  , yesod-core
-                 , lucid
-                 , text
                  , classy-prelude-yesod
                  , directory
-                 , yesod-table
                  , containers
-                 , lucid-bootstrap
-                 , yesod-lucid
-                 , blaze-markup
+                 , aeson
+                 , yesod-websockets

@@ -40,9 +40,9 @@ data NavBar a b = NavBar
     , content :: b
     }
 
-data Pills a = Pills (Array a)
+data Pills a = Pills a
 
-instance pillsToMarkup :: (ToMarkup a) => ToMarkup (Pills a) where
+instance pillsToMarkup :: (ToMarkup a, Foldable f) => ToMarkup (Pills (f a)) where
     toMarkup (Pills items) =
         H.with (H.ul $ pills items) (A.className "nav nav-pills nav-stacked")
 
