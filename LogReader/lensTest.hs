@@ -2,6 +2,11 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TemplateHaskell #-}
 
+module LogReader
+    ( toLogKey
+    , tailFile
+    )
+
 import Prelude ()
 import ClassyPrelude
 
@@ -90,13 +95,6 @@ removeUser Nothing = Nothing
 -- for more.
 setFilePosition :: LogKey -> Integer -> LogDirMap -> LogDirMap
 setFilePosition (dir, fName) pos = ix dir %~ (logFile %~ (ix fName %~ (position .~ pos)))
-
--- getChannel :: LogKey -> LogDirMap -> Maybe (STM (TChan Text))
--- getChannel (dir, fName) logDirMap = logFileMap >>= mChan
---     where
---       logFileMap = (^. logFile) <$> (^.at dir) logDirMap
---       mChan :: LogFileMap -> Maybe (STM (TChan Text))
---       mChan x = (^. channel) <$> (^.at fName) x
 
 getLogFile :: LogKey -> LogDirMap -> Maybe LogFile
 getLogFile (dir, fName) logDirMap = ((^.logFile) <$> (^.at dir) logDirMap) >>= (^.at fName)

@@ -1,0 +1,23 @@
+{
+  "name": "log-reader-ui",
+  "authors": [
+    "Joshua McCartney <limaner2002@gmail.com>"
+  ],
+  "moduleType": [
+      "node"
+  ],
+  "license": "MIT",
+  "ignore": [
+    "**/.*",
+    "bower_components",
+    "output",
+    "test",
+    "html"
+  ],
+  "dependencies": {
+      "purescript-smolder": "^3.0.1",
+      "purescript-strings": "^0.7.0",
+      "purescript-websocket-simple": "^0.2.0",
+      "purescript-console": "^0.1.1"
+  }
+}
