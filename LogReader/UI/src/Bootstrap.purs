@@ -40,22 +40,26 @@ data NavBar a b = NavBar
     , content :: b
     }
 
-data Pills a = Pills a
+data Pill a = Pill a Boolean Int
+data Pills a = Pills (Array (Pill a))
 
-instance pillsToMarkup :: (ToMarkup a, Foldable f) => ToMarkup (Pills (f a)) where
-    toMarkup (Pills items) =
-        H.with (H.ul $ pills items) (A.className "nav nav-pills nav-stacked")
+instance pillToMarkup :: (ToMarkup a) => ToMarkup (Pill a) where
+    toMarkup (Pill item isActive idx) = H.with (H.li (H.with (H.a $ toMarkup item) (A.href ("#item" <> show idx) <> dataToggle "tab"))) (markActive isActive)
 
-pills :: forall f a. (Foldable f, ToMarkup a) => f a -> H.Markup
-pills items = buildComponent createPill items
+instance pillsToMarkup :: (ToMarkup a) => ToMarkup (Pills a) where
+    toMarkup pills =
+        H.with (H.ul $ renderPills pills) (A.className "nav nav-pills nav-stacked")
+
+markActive :: Boolean -> H.Attribute
+markActive isActive =
+    if isActive
+    then A.className "active"
+    else mempty
+
+renderPills :: forall a. (ToMarkup a) => Pills a -> H.Markup
+renderPills (Pills items) = buildComponent renderPill items
     where
-      createPill item idx =
-          H.with (H.li (H.with (H.a $ toMarkup item) (A.href ("#item" <> show idx) <> dataToggle "tab"))) (isActive idx)
-      isActive :: Int -> H.Attribute
-      isActive idx =
-          if idx == 1
-          then A.className "active"
-          else mempty
+      renderPill pill idx = toMarkup pill
 
 buildVerticalNav :: forall a b. (ToMarkup a, ToMarkup b) => NavBar a b -> H.MarkupM Unit
 buildVerticalNav (NavBar o) =

@@ -148,9 +148,11 @@ updateAction tLogDirMap (Modified path _) = do
       withBinaryFile path ReadMode $ \handle -> do
           size <- hFileSize handle
           if size < (logFile ^. position)
-          then
+          then                  -- The file just rolled over or was
+                                -- truncated. Start from the beginning
               hSeek handle AbsoluteSeek 0
-          else
+          else                  -- Move to the old position and read
+                                -- only the new data.
               hSeek handle AbsoluteSeek (logFile ^. position)
           sourceHandle handle $$ writeChannel
           updateTLogDirMap (setFilePosition logKey size) tLogDirMap
