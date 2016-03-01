@@ -7,8 +7,9 @@ import           Yesod
 import ClassyPrelude.Yesod hiding (FilePath)
 import Data.Aeson.TH
 import qualified Data.Char as C
+import LogReader.Watcher (TLogDirMap)
 
-data LogReader = LogReader
+data LogReader = LogReader TLogDirMap
 
 data Directory = Directory Text
 data FilePath = FilePath Text
@@ -25,7 +26,8 @@ type DirMap = Map Directory FileMap
 -- We have a familiar analogue from mkYesod, with just one extra parameter.
 -- We'll discuss that later.
 mkYesodSubData "LogReader" [parseRoutes|
-/#LogType LogReaderR GET -- POST
+/#LogType LogFilesR GET -- POST
+/#LogType/#Text LogSocketR GET
 |]
 
 data LogFiles = LogFiles
@@ -36,12 +38,12 @@ data LogFiles = LogFiles
 $(deriveJSON defaultOptions{fieldLabelModifier = drop 0, constructorTagModifier = map C.toLower} ''LogFiles)
 
 class GetPath a where
-    getPath :: a -> Directory
+    getPath :: a -> Text
 
 instance GetPath LogType where
-    getPath Application = Directory "/opt/appian/logs/"
-    getPath JBoss = Directory "/opt/jboss-eap-6.4/standalone/log/"
-    getPath Tmp = Directory "/private/tmp/"
+    getPath Application = "/opt/appian/logs/"
+    getPath JBoss = "/opt/jboss-eap-6.4/standalone/log/"
+    getPath Tmp = "/private/tmp/"
 
 instance PathPiece LogType where
     fromPathPiece = readMay

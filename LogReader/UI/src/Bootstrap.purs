@@ -67,3 +67,4 @@ buildVerticalNav (NavBar o) =
   where
     titleContainer = H.with (H.div $ toMarkup o.title) (A.className "col-xs-3")
     contentContainer = H.with (H.div $ toMarkup o.content) (A.className "col-xs-9")
+

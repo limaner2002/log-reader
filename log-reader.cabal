@@ -15,6 +15,7 @@ library
     hs-source-dirs: .
     exposed-modules: LogReader.LogReader
                      LogReader.Data
+    other-modules:   LogReader.Watcher
 
     if flag(dev) || flag(library-only)
         cpp-options:   -DDEVELOPMENT
@@ -47,3 +48,10 @@ library
                  , containers
                  , aeson
                  , yesod-websockets
+                 , lens
+                 , fsnotify
+                 , filepath
+                 , conduit-combinators
+                 , async
+                 , classy-prelude
+                 , conduit
