@@ -1,70 +1,97 @@
 module LogReader.Bootstrap where
 
 import Prelude
-import qualified Text.Smolder.HTML as H
-import qualified Text.Smolder.Markup as H
-import qualified Text.Smolder.HTML.Attributes as A
-import Data.Maybe
+import Halogen
+import qualified Halogen.HTML.Indexed as H
+import qualified Halogen.HTML.Properties.Indexed as A
+import qualified Halogen.Themes.Bootstrap3 as B
+
 import Data.Array
-import Data.Foldable
-import Data.Monoid
+import Data.Foldable (intercalate)
+import Data.Monoid (mempty)
+import Data.Maybe
+import Data.Tuple
 
-class ToMarkup a where
-    toMarkup :: a -> H.Markup
+import Optic.Lens
+import Optic.Getter
+import Optic.Setter hiding (set)
 
-instance stringToMarkup :: ToMarkup String where
-    toMarkup str = H.text str
-
-instance maybeToMarkup :: (ToMarkup a) => ToMarkup (Maybe a) where
-    toMarkup (Just val) = toMarkup val
-    toMarkup Nothing = mempty
-
-dataToggle = H.attribute "data-toggle"
-
-data ComponentAccum = ComponentAccum H.Markup Int
-
-buildComponent :: forall f a. (ToMarkup a, Foldable f)
-               => (a -> Int -> H.Markup)
-               -> f a
-               -> H.MarkupM Unit
-buildComponent createComponent items =
-    getComponent componentAccum
-  where
-    accumComponent (ComponentAccum components oldIdx) item = ComponentAccum
-                                                             (components <> createComponent item (oldIdx)) (oldIdx + 1)
-    componentAccum = foldl accumComponent (ComponentAccum mempty 1) items
-    getComponent (ComponentAccum componentMarkup _) = componentMarkup
-
-data NavBar a b = NavBar
-    { title :: a
-    , content :: b
+data NavLink = NavLink
+    { text :: String
+    , active :: Boolean
+    , target :: String
     }
 
-data Pill a = Pill a Boolean Int
-data Pills a = Pills (Array (Pill a))
+instance navLinkShow :: Show NavLink where
+    show (NavLink o) =
+           "text: " <> o.text
+        <> ", active: " <> show o.active
+        <> ", target: " <> o.target
 
-instance pillToMarkup :: (ToMarkup a) => ToMarkup (Pill a) where
-    toMarkup (Pill item isActive idx) = H.with (H.li (H.with (H.a $ toMarkup item) (A.href ("#item" <> show idx) <> dataToggle "tab"))) (markActive isActive)
+data Nav = Nav
+    { items :: Array NavLink
+    , navType :: NavType
+    }
 
-instance pillsToMarkup :: (ToMarkup a) => ToMarkup (Pills a) where
-    toMarkup pills =
-        H.with (H.ul $ renderPills pills) (A.className "nav nav-pills nav-stacked")
+instance navShow :: Show Nav where
+    show (Nav o) =
+           "Nav{"
+        <> " items: " <> show o.items
+        <> " navType: " <> show o.navType
 
-markActive :: Boolean -> H.Attribute
-markActive isActive =
-    if isActive
-    then A.className "active"
-    else mempty
+data NavType = Normal
+             | Pill
 
-renderPills :: forall a. (ToMarkup a) => Pills a -> H.Markup
-renderPills (Pills items) = buildComponent renderPill items
+instance navTypeShow :: Show NavType where
+    show Normal = "Normal"
+    show Pill = "Pill"
+
+navbar :: forall p i. Nav -> H.HTML p i
+navbar (Nav conf) =
+    H.ul [ A.classes [B.nav, B.navPills, B.navStacked] ]
+         (map renderNavItem conf.items)
+
     where
-      renderPill pill idx = toMarkup pill
+      renderNavItem (NavLink navLink) = H.li
+                              (if navLink.active then [A.class_ B.active] else [])
+                              [H.a [A.target navLink.target] [H.text navLink.text] ]
 
-buildVerticalNav :: forall a b. (ToMarkup a, ToMarkup b) => NavBar a b -> H.MarkupM Unit
-buildVerticalNav (NavBar o) =
-    H.with (H.div (titleContainer <> contentContainer)) (A.className "row")
+
+test = Nav { items: [ NavLink {text: "first", active: true, target: "fst"}
+                    , NavLink {text: "second", active: false, target: "snd"}
+                    ]
+           , navType: Pill
+           }
+
+_active :: forall f. (Functor f) => (Boolean -> f Boolean) -> NavLink -> f NavLink
+_active = lens (\(NavLink o) -> o.active)
+               (\(NavLink o) active ->
+                    NavLink { text: o.text
+                            , active: active
+                            , target: o.target
+                            }
+               )
+
+_items = lens (\(Nav o) -> o.items)
+              (\(Nav o) items ->
+                   Nav { navType: o.navType
+                       , items: items
+                       }
+              )
+
+getActive :: Int -> Array NavLink -> Maybe Boolean
+getActive idx arr =
+    map (^. _active) $ arr !! idx
+
+
+setActive :: Int -> Nav -> Nav
+setActive idx nav =
+   (_items .~ setActive') nav
   where
-    titleContainer = H.with (H.div $ toMarkup o.title) (A.className "col-xs-3")
-    contentContainer = H.with (H.div $ toMarkup o.content) (A.className "col-xs-9")
-
+    setActive' = map setIndexed indexed
+    indexed = zip indices items
+    indices = 0 .. ((length items) - 1)
+    items = nav ^. _items
+    setIndexed (Tuple i item)
+        | i == idx = (_active .~ true) item
+        | otherwise = (_active .~ false) item
