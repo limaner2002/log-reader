@@ -12,7 +12,7 @@ module LogReader.LogReader
 
 import           LogReader.Data
 import           Yesod
-import           ClassyPrelude.Yesod hiding ((<>), writeChan, readChan)
+import           ClassyPrelude.Yesod -- hiding (writeChan, readChan)
 import qualified System.Directory as SysDir
 import Data.Aeson (encode)
 import Yesod.WebSockets
@@ -37,7 +37,7 @@ getLogSocketR logType logName = do
   webSockets $ mainLoop mChans logKey
 
 mainLoop :: MonadIO m
-         => (Maybe LogChannel, Maybe LogChannel)
+         => (Maybe LogChannel, Maybe DirChannel)
          -> LogKey
          -> WebSocketsT m ()
 mainLoop (Nothing, Nothing) _ = fail "No channels?"
@@ -45,11 +45,13 @@ mainLoop (Nothing, _) _ = fail "No read channel?"
 mainLoop (_, Nothing) _ = fail "No write channel?"
 mainLoop (Just rChan, Just wChan) logKey =
     let check :: MonadIO m => Either t1 t2 -> WebSocketsT m ()
-        check (Left _) = liftIO $ writeChan wChan $ Closed logKey
+        check (Left _) = liftIO $ writeDChan wChan $ Closed logKey
         check (Right _) = mainLoop (Just rChan, Just wChan) logKey
 
     in do
-      result <- liftIO $ readChan rChan
+      liftIO $ putStrLn "Waiting for content"
+      result <- liftIO $ readFChan rChan
+      liftIO $ putStrLn $ "Received " <> tshow result
       case result of
         Ping -> sendTextDataE ("Ping" :: Text) >>= check
         Data content -> sendTextDataE content >>= check

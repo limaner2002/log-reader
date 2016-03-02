@@ -11,18 +11,18 @@ module LogReader.Watcher
     , TLogDirMap
     , ChannelMessage (..)
     , LogChannel
-    , LogReader.Watcher.writeChan
-    , LogReader.Watcher.readChan
+    , DirChannel
+    , LogReader.Watcher.writeDChan
+    , LogReader.Watcher.readFChan
     ) where
 
 import Prelude ()
-import ClassyPrelude hiding (tryReadTChan, dupTChan)
+import ClassyPrelude hiding (tryReadTChan, dupTChan, writeChan)
 import qualified ClassyPrelude as CP
 
 import Control.Lens
 import Data.Map.Lens
 import qualified Data.Map as M
---import Control.Monad.State
 import System.FSNotify
 import Control.Concurrent (threadDelay)
 import System.IO (withBinaryFile, hFileSize, hSeek, IOMode(..), SeekMode(..))
@@ -31,7 +31,8 @@ import Data.Conduit
 import Data.Conduit.Combinators (sourceHandle)
 import Control.Concurrent.Async (async)
 
-newtype LogChannel = LogChannel (STM (TChan ChannelMessage))
+newtype LogChannel = LogChannel (TChan ChannelMessage)
+newtype DirChannel = DirChannel (TChan ChannelMessage)
 
 data LogFile = LogFile
     { _position :: !Integer
@@ -46,7 +47,7 @@ instance Show LogFile where
 data LogDir = LogDir
     { _nWatchers :: !Int
     , _logFile :: LogFileMap
-    , _dirChan :: LogChannel
+    , _dirChan :: DirChannel
     }
 
 instance Show LogDir where
@@ -58,6 +59,8 @@ data DirPath = DirPath Text
 data FileName = FileName Text
     deriving (Ord, Eq, Show)
 newtype LogKey = LogKey (DirPath, FileName)
+    deriving Show
+
 type LogFileMap = M.Map FileName LogFile
 type LogDirMap = M.Map DirPath LogDir
 type TLogDirMap = TVar LogDirMap
@@ -66,18 +69,19 @@ data ChannelMessage
     = Ping
     | Closed LogKey
     | Data Text
+      deriving Show
 
 delay :: Int
-delay = truncate 30e6
+delay = truncate 3e6
 
 nTries :: Int
-nTries = 10
+nTries = 3
 
 makeLenses ''LogFile
 makeLenses ''LogDir
 
-openFile :: LogKey -> LogDirMap -> LogDirMap
-openFile (LogKey (dir, fName)) =  at dir %~ (addDirWatcher fName)
+openFile :: LogKey -> DirChannel -> LogChannel -> LogDirMap -> LogDirMap
+openFile (LogKey (dir, fName)) dirChan fileChan =  at dir %~ (addDirWatcher fName dirChan fileChan)
 
 closeFile :: LogKey -> LogDirMap -> LogDirMap
 closeFile (LogKey (dir, fName)) = at dir %~ (removeDirWatcher fName)
@@ -86,11 +90,11 @@ closeFile (LogKey (dir, fName)) = at dir %~ (removeDirWatcher fName)
 -- counter, else create a new LogDir. Note this only creates an entry
 -- for the file in the LogFileMap and not a new file on the file
 -- system.
-addDirWatcher :: FileName -> Maybe LogDir -> Maybe LogDir
-addDirWatcher fName (Just logDir) = Just $ (newFile fName) . (nWatchers +~ 1) $ logDir
-addDirWatcher fName Nothing = Just ((newFile fName) . (nWatchers +~ 1) $ newDir)
+addDirWatcher :: FileName -> DirChannel -> LogChannel -> Maybe LogDir -> Maybe LogDir
+addDirWatcher fName _ fileChan (Just logDir) = Just $ (newFile fName fileChan) . (nWatchers +~ 1) $ logDir
+addDirWatcher fName dirChan fileChan Nothing = Just ((newFile fName fileChan) . (nWatchers +~ 1) $ newDir)
     where
-      newDir = LogDir 0 mempty (LogChannel newTChan)
+      newDir = LogDir 0 mempty dirChan
 
 -- If the directory has more than one person watching, just decrement
 -- the user counter, else stops watching the directory
@@ -101,15 +105,15 @@ removeDirWatcher fName (Just (LogDir n f c)) = Just $ LogDir (n-1) newFile c
       newFile = at fName %~ removeUser $ f
 removeDirWatcher _ Nothing = Nothing
 
-newFile fName = logFile %~ (at fName %~ addUser)
+newFile fName chan = logFile %~ (at fName %~ addUser chan)
 
 -- If the file is already being watched, just increment the user
 -- counter, else create a new file. Note this only creates an entry
 -- for the file in the LogFileMap and not a new file on the file
 -- system.
-addUser :: Maybe LogFile -> Maybe LogFile
-addUser (Just logFile) = Just $ (watchers +~ 1) $ logFile
-addUser Nothing = Just $ LogFile 0 1 (LogChannel newBroadcastTChan)
+addUser :: LogChannel -> Maybe LogFile -> Maybe LogFile
+addUser _ (Just logFile) = Just $ (watchers +~ 1) $ logFile
+addUser chan Nothing = Just $ LogFile 0 1 chan
 
 removeUser :: Maybe LogFile -> Maybe LogFile
 removeUser (Just (LogFile _ 1 _)) = Nothing
@@ -131,30 +135,34 @@ sendFileChanges (Just stmChan) changes = atomically go
       go = stmChan >>= \chan -> writeTChan chan changes
 sendFileChanges Nothing _ = return ()
 
-tailFile :: TLogDirMap -> LogKey -> IO (Maybe (LogChannel), Maybe (LogChannel))
+tailFile :: TLogDirMap -> LogKey -> IO (Maybe (LogChannel), Maybe (DirChannel))
 tailFile tLogDirMap (LogKey (dir, fName)) = do
   logDirMap <- atomically $ readTVar tLogDirMap
-  updateTLogDirMap (openFile $ LogKey (dir, fName)) tLogDirMap
+  fileChannel <- LogChannel <$> newTChanIO
+  dirChannel <- DirChannel <$> newTChanIO
+  updateTLogDirMap (openFile (LogKey (dir, fName)) dirChannel fileChannel) tLogDirMap
 
   case (logDirMap ^.at dir) of
     Nothing -> do
-        _ <- async (
-               withManager $ \mgr -> do
-                 _ <- watchDir
-                        mgr
-                        (getPath dir)
-                        (const True)
-                        (updateAction tLogDirMap)
-                 moveToEndOfFile (LogKey (dir, fName)) tLogDirMap
-                 mainLoop tLogDirMap dir 0
+        _ <- async ( do
+               withManager $ \mgr ->
+                 watchDir
+                     mgr
+                     (getPath dir)
+                     (const True)
+                     (updateAction tLogDirMap)
+               moveToEndOfFile (LogKey (dir, fName)) tLogDirMap
+               mainLoop tLogDirMap dir 0
               )
         return ()
     Just _ -> return ()
 
   atomically $ do
     logDirMap <- readTVar tLogDirMap
-    let mFileChan = fmap (dupTChan . (^. channel)) $ getLogFile (LogKey (dir, fName)) logDirMap
-        mDirChan = fmap (^. dirChan) logDirMap ^.at dir
+    let mDirChan = fmap (^. dirChan) $ logDirMap ^.at dir
+
+    mFileChan <- sequence $ fmap (dupTChan . (^. channel)) $ getLogFile (LogKey (dir, fName)) logDirMap
+
     return (mFileChan, mDirChan)
 
 moveToEndOfFile :: LogKey -> TLogDirMap -> IO ()
@@ -173,11 +181,13 @@ updateAction _ (Added _ _) = return ()
 updateAction _ (Removed _ _) = return ()
 updateAction tLogDirMap (Modified path _) = do
   logDirMap <- atomically $ readTVar tLogDirMap
+  putStrLn $ "File " <> pack path <> " was modified."
+  putStrLn $ "logDirMap " <> tshow logDirMap
   let logKey = toLogKey path
 
   case getLogFile logKey logDirMap of
     Nothing -> do
-      putStrLn "This file is not currently being watched so nothing will happen."
+      putStrLn $ "The file " <> pack path <> " is not currently being watched so nothing will happen."
       return ()
     Just logFile -> do
       withBinaryFile path ReadMode $ \handle -> do
@@ -189,17 +199,18 @@ updateAction tLogDirMap (Modified path _) = do
             else                  -- Move to the old position and read
                                 -- only the new data.
               hSeek handle AbsoluteSeek (logFile ^. position)
-          -- sourceHandle handle $$ writeChannel (logFile ^. channel)
+          sourceHandle handle $$ writeChannel (logFile ^. channel)
           updateTLogDirMap (setFilePosition logKey size) tLogDirMap
 
-writeChannel :: STM (TChan Text) -> Consumer Text IO ()
-writeChannel stmChan = do
+writeChannel :: LogChannel -> Consumer Text IO ()
+writeChannel chan = do
   mContents <- await
   case mContents of
     Nothing -> return ()
     Just contents -> do
-       atomically $ stmChan >>= \chan -> writeTChan chan contents
-       writeChannel stmChan
+       putStrLn $ "Writing " <> contents <> " to channel"
+       liftIO $ writeFChan chan (Data contents)
+       writeChannel chan
 
 updateTLogDirMap :: (LogDirMap -> LogDirMap) -> TLogDirMap -> IO ()
 updateTLogDirMap f tLogDirMap =
@@ -215,68 +226,75 @@ toLogKey path = LogKey (dir, fName)
       fName = FileName $ pack $ takeFileName path
 
 toLogKey' :: Text -> Text -> LogKey
-toLogKey' dir fName = LogKey (DirPath dir, FileName fName)
+toLogKey' dir fName = toLogKey path
+    where
+      path = unpack dir </> unpack fName
+--toLogKey' dir fName = LogKey (DirPath dir, FileName fName)
 
 fromLogKey :: LogKey -> FilePath
 fromLogKey (LogKey (DirPath dir, FileName fName)) = unpack dir </> unpack fName
 
 mainLoop :: TLogDirMap -> DirPath -> Int -> IO ()
 mainLoop tLogDirMap dir try
-    | try == nTries = return ()
+    | try == nTries = putStrLn "Exiting main loop"
     | otherwise = do
   threadDelay delay
 
   mAction <- atomically $ do
     logDirMap <- readTVar tLogDirMap
-    case fmap (^. dirChan) logDirMap ^.at dir of
+    case fmap (^. dirChan) $ logDirMap ^.at dir of
       Nothing -> return Nothing
-      Just stmChan -> do
-                 tryReadChan stmChan
+      Just chan -> tryReadDChan chan                 
+
+  print $ "mAction " <> tshow mAction
+  print $ "try: " <> tshow try
 
   case mAction of
     Nothing -> mainLoop tLogDirMap dir (try + 1)
-    Just (Closed logKey) ->
+    Just (Closed logKey) -> do
+        print $ "Closing " <> tshow logKey
         atomically $ modifyTVar tLogDirMap (closeFile logKey)
     Just Ping -> mainLoop tLogDirMap dir 0
     _ -> do
       putStrLn "Received data for some reason?"
       return ()
 
---   logDirMap <- atomically $ readTVar tLogDirMap
+tryReadFChan :: LogChannel -> STM (Maybe ChannelMessage)
+tryReadFChan (LogChannel chan) = CP.tryReadTChan chan
 
---   case getLogFile logKey logDirMap of
---     Nothing -> return ()
---     Just logFile -> 
---         mResult <- atomically $ tryReadTChan (logFile ^. channel)
---         case mResult of
---           Nothing -> mainLoop logKey tLogDirMap (try + 1)
---           Closed -> closeFile logKey logDirMap
-        
-  -- logDir <- atomically $ readTVar tLogDir
-  -- print logDir
-  -- threadDelay delay
-  -- putStrLn "Exiting. TLogDirMap is:"
-  -- logDir <- atomically $ readTVar tLogDir
-  -- print logDir
+tryReadDChan :: DirChannel -> STM (Maybe ChannelMessage)
+tryReadDChan (DirChannel chan) = tryReadFChan $ LogChannel chan
 
-tryReadChan :: LogChannel -> STM (Maybe ChannelMessage)
-tryReadChan (LogChannel stmChan) = stmChan >>= CP.tryReadTChan
-
-dupTChan :: LogChannel -> LogChannel
-dupTChan (LogChannel stmChan) = LogChannel $ stmChan >>= CP.dupTChan
+dupTChan :: LogChannel -> STM (LogChannel)
+dupTChan (LogChannel chan) = LogChannel <$> CP.dupTChan chan
 
 test :: IO ()
 test = do
-  let dir = DirPath "/private/tmp"
-      fName = FileName "server.log"
+  let path = "/private/tmp/server.log"
 
-  logDirMap <- atomically $ newTVar mempty
-  _ <- tailFile logDirMap (LogKey (dir, fName))
-  return ()
+  tLogDirMap <- atomically $ newTVar mempty
+  (Just rChan, Just wChan) <- tailFile tLogDirMap (toLogKey path)
+  threadDelay 2000000
 
-writeChan :: LogChannel -> ChannelMessage -> IO ()
-writeChan (LogChannel stmChan) stuff =
-    atomically $ stmChan >>= \chan -> writeTChan chan stuff
+  logDirMap <- atomically $ readTVar tLogDirMap
+  print logDirMap
+  result <- readFChan rChan
+  print result
 
-readChan :: LogChannel -> IO ChannelMessage
-readChan (LogChannel stmChan) = atomically $ stmChan >>= CP.readTChan
+  writeDChan wChan $ Closed (toLogKey path)
+  logDirMap <- atomically $ readTVar tLogDirMap
+  print logDirMap
+
+writeFChan :: LogChannel -> ChannelMessage -> IO ()
+writeFChan (LogChannel chan) stuff =
+    atomically $ writeTChan chan stuff
+
+writeDChan :: DirChannel -> ChannelMessage -> IO ()
+writeDChan (DirChannel chan) stuff =
+    writeFChan (LogChannel chan) stuff
+
+readFChan :: LogChannel -> IO ChannelMessage
+readFChan (LogChannel chan) = atomically $ CP.readTChan chan
+
+readDChan :: DirChannel -> IO ChannelMessage
+readDChan (DirChannel chan) = readFChan (LogChannel chan)
