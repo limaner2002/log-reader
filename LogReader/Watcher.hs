@@ -82,8 +82,8 @@ instance ToJSON ChannelMessage where
 delay :: Int
 delay = truncate 30e6
 
-nTries :: Int
-nTries = 3
+pollingInterval :: Int
+pollingInterval = truncate 5e6
 
 makeLenses ''LogFile
 makeLenses ''LogDir
@@ -153,8 +153,11 @@ tailFile tLogDirMap (LogKey (dir, fName)) = do
 
   case (logDirMap ^.at dir) of
     Nothing -> do
+        let conf = defaultConfig { confUsePolling = True
+                                 , confPollInterval = pollingInterval
+                                 }
         _ <- async (
-               withManager $ \mgr -> do
+               withManagerConf conf $ \mgr -> do
                  _ <- watchDir
                         mgr
                         (getPath dir)
