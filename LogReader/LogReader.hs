@@ -17,24 +17,44 @@ import qualified System.Directory as SysDir
 import Data.Aeson (encode)
 import Yesod.WebSockets
 import LogReader.Watcher
+import Data.Yaml hiding (encode)
 
-getDirectoryContents :: (GetPath dir, MonadHandler site) => dir -> site [Text]
-getDirectoryContents dir = do
-  contents <- liftIO $ SysDir.getDirectoryContents $ unpack $ getPath dir
+withSettings f = do
+  eSettings <- liftIO $ readSettings
+  case eSettings of
+    Left exception ->
+        error $ prettyPrintParseException exception
+    Right settings ->
+        f settings
+
+getDirectoryContents :: (GetPath dir, MonadHandler site) => dir -> LogReaderSettings -> site [Text]
+getDirectoryContents dir settings = do
+  contents <- liftIO $ SysDir.getDirectoryContents $ unpack $ getPath settings dir
   return $ map pack $ filter (\x -> not $ x `elem` [".", ".."]) contents
 
 getLogFilesR :: Yesod master => LogType -> HandlerT LogReader (HandlerT master IO) ()
-getLogFilesR logType = do
-  list <- LogFiles <$> getDirectoryContents logType
-  webSockets $
-    sendTextData $ encode list
+getLogFilesR logType =
+  withSettings $ \settings -> do
+    list <- LogFiles <$> getDirectoryContents logType settings
+    webSockets $
+       sendTextData $ encode list
 
 getLogSocketR :: Yesod master => LogType -> Text -> HandlerT LogReader (HandlerT master IO) ()
-getLogSocketR logType logName = do
-  let logKey = toLogKey' (getPath logType) logName
-  (LogReader tLogDirMap) <- getYesod
-  mChans <- liftIO $ tailFile tLogDirMap logKey
-  webSockets $ mainLoop mChans logKey
+getLogSocketR logType logName =
+  withSettings $ \settings -> do
+    let logKey = toLogKey' (getPath settings logType) logName
+    (LogReader tLogDirMap) <- getYesod
+    mChans <- liftIO $ tailFile tLogDirMap logKey
+    webSockets $ mainLoop mChans logKey
+  -- eSettings <- liftIO $ readSettings
+  -- case eSettings of
+  --   Left exception ->
+  --       error $ prettyPrintParseException exception
+  --   Right settings -> do
+  --       let logKey = toLogKey' (getPath settings logType) logName
+  --       (LogReader tLogDirMap) <- getYesod
+  --       mChans <- liftIO $ tailFile tLogDirMap logKey
+  --       webSockets $ mainLoop mChans logKey
 
 mainLoop :: MonadIO m
          => (Maybe LogChannel, Maybe DirChannel)

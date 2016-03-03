@@ -5,11 +5,18 @@ module LogReader.Data where
 
 import           Yesod
 import ClassyPrelude.Yesod hiding (FilePath)
+import Data.Yaml
 import Data.Aeson.TH
 import qualified Data.Char as C
 import LogReader.Watcher (TLogDirMap)
 
 data LogReader = LogReader TLogDirMap
+
+data LogReaderSettings = LogReaderSettings
+    { jbossPath :: Text
+    , applicationPath :: Text
+    , tmpPath :: Text
+    }
 
 data Directory = Directory Text
 data FilePath = FilePath Text
@@ -36,14 +43,19 @@ data LogFiles = LogFiles
   deriving (Show, Eq)
 
 $(deriveJSON defaultOptions{fieldLabelModifier = drop 0, constructorTagModifier = map C.toLower} ''LogFiles)
+$(deriveJSON defaultOptions{fieldLabelModifier = drop 0, constructorTagModifier = map C.toLower} ''LogReaderSettings)
+
+readSettings :: IO (Either ParseException LogReaderSettings)
+readSettings =
+    decodeFileEither "logSettings.yaml"
 
 class GetPath a where
-    getPath :: a -> Text
+    getPath :: LogReaderSettings -> a -> Text
 
 instance GetPath LogType where
-    getPath Application = "/opt/appian/logs/"
-    getPath JBoss = "/opt/jboss-eap-6.4/standalone/log/"
-    getPath Tmp = "/private/tmp/"
+    getPath settings Application = applicationPath settings
+    getPath settings JBoss = jbossPath settings
+    getPath settings Tmp = tmpPath settings
 
 instance PathPiece LogType where
     fromPathPiece = readMay
