@@ -33,6 +33,7 @@ import Data.Conduit.Combinators (sourceHandle)
 import Control.Concurrent.Async (async, race_)
 import Data.Aeson hiding ((.=))
 import qualified Data.Aeson as AE
+import System.IO (hFlush, stdout)
 
 newtype LogChannel = LogChannel (TChan ChannelMessage)
 newtype DirChannel = DirChannel (TChan ChannelMessage)
@@ -78,6 +79,8 @@ instance ToJSON ChannelMessage where
     toJSON Ping = object["type" AE..= ("Ping" :: Text)]
     toJSON (Data contents) =
         object ["type" AE..= ("Data" :: Text), "contents" AE..= contents]
+    toJSON (Closed logKey) =
+    	object ["type" AE..= ("Closed" :: Text), "file" AE..= tshow logKey]
 
 delay :: Int
 delay = truncate 30e6
@@ -147,7 +150,7 @@ sendFileChanges Nothing _ = return ()
 tailFile :: TLogDirMap -> LogKey -> IO (Maybe (LogChannel), Maybe (DirChannel))
 tailFile tLogDirMap (LogKey (dir, fName)) = do
   logDirMap <- atomically $ readTVar tLogDirMap
-  fileChannel <- LogChannel <$> newTChanIO
+  fileChannel <- LogChannel <$> newBroadcastTChanIO
   dirChannel <- DirChannel <$> newTChanIO
   updateTLogDirMap (openFile (LogKey (dir, fName)) dirChannel fileChannel) tLogDirMap
 
@@ -167,12 +170,16 @@ tailFile tLogDirMap (LogKey (dir, fName)) = do
                  race_
                    (forever $ do
                       threadDelay delay
+      		      putStrLn "Sending ping"
+		      hFlush stdout
                       atomically $ writeFChan fileChannel Ping
                    )
                    (mainLoop tLogDirMap dir)
               )
         return ()
     Just _ -> return ()
+
+  putStrLn "Exiting tailFile"
 
   atomically $ do
     logDirMap <- readTVar tLogDirMap
@@ -200,11 +207,12 @@ updateAction tLogDirMap (Modified path _) = do
   logDirMap <- atomically $ readTVar tLogDirMap
   putStrLn $ "File " <> pack path <> " was modified."
   putStrLn $ "logDirMap " <> tshow logDirMap
+  hFlush stdout
   let logKey = toLogKey path
 
   case getLogFile logKey logDirMap of
     Nothing -> do
-      putStrLn $ "The file " <> pack path <> " is not currently being watched so nothing will happen."
+      -- putStrLn $ "The file " <> pack path <> " is not currently being watched so nothing will happen."
       return ()
     Just logFile -> do
       withBinaryFile path ReadMode $ \handle -> do
@@ -225,7 +233,7 @@ writeChannel chan = do
   case mContents of
     Nothing -> return ()
     Just contents -> do
-       putStrLn $ "Writing " <> contents <> " to channel"
+       -- putStrLn $ "Writing " <> contents <> " to channel"
        liftIO $ atomically $ writeFChan chan (Data contents)
        writeChannel chan
 
@@ -253,6 +261,7 @@ fromLogKey (LogKey (DirPath dir, FileName fName)) = unpack dir </> unpack fName
 mainLoop :: TLogDirMap -> DirPath -> IO ()
 mainLoop tLogDirMap dir = do
   putStrLn "Entered main loop"
+  hFlush stdout
   mAction <- atomically $ do
     logDirMap <- readTVar tLogDirMap
     case fmap (^. dirChan) $ logDirMap ^.at dir of
@@ -261,9 +270,12 @@ mainLoop tLogDirMap dir = do
         msg <- readDChan chan
         return $ Just msg
 
+  print mAction
+  hFlush stdout
   case mAction of
     Nothing -> do
       putStrLn "Exiting main loop"
+      hFlush stdout
       return ()
     Just (Closed logKey) -> do
           atomically $ modifyTVar tLogDirMap (closeFile logKey)
@@ -281,11 +293,11 @@ dupTChan (LogChannel chan) = LogChannel <$> CP.dupTChan chan
 
 test :: IO ()
 test = do
-  let path = "/private/tmp/server.log"
+  let path = "E:\\Temp\\server.log"
 
   tLogDirMap <- atomically $ newTVar mempty
   (Just rChan, Just wChan) <- tailFile tLogDirMap (toLogKey path)
-  threadDelay 20000000
+  threadDelay $ truncate 2e6
 
   logDirMap <- atomically $ readTVar tLogDirMap
   print logDirMap
@@ -296,7 +308,7 @@ test = do
   putStrLn "Sending close"
   atomically $ writeDChan wChan $ Closed (toLogKey path)
 
-  threadDelay 2000000
+  threadDelay $ truncate 20e6
   logDirMap <- atomically $ readTVar tLogDirMap
   print logDirMap
 

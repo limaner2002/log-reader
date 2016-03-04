@@ -56,3 +56,4 @@ library
                  , classy-prelude
                  , conduit
                  , yaml
+                 , text
