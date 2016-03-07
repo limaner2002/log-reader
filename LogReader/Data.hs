@@ -33,8 +33,10 @@ type DirMap = Map Directory FileMap
 -- We have a familiar analogue from mkYesod, with just one extra parameter.
 -- We'll discuss that later.
 mkYesodSubData "LogReader" [parseRoutes|
-/#LogType LogFilesR GET -- POST
-/#LogType/#Text LogSocketR GET
+/list/#LogType LogFilesR GET -- POST
+/view/#LogType/#Text LogSocketR GET
+/download/#LogType/#Text LogDownloadR GET
+/status WatcherStatusR GET
 |]
 
 data LogFiles = LogFiles

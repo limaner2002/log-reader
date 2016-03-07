@@ -6,6 +6,7 @@
 module LogReader.Watcher
     ( toLogKey
     , toLogKey'
+    , fromLogKey
     , tailFile
     , LogKey
     , TLogDirMap
@@ -14,7 +15,9 @@ module LogReader.Watcher
     , DirChannel
     , LogReader.Watcher.writeDChan
     , LogReader.Watcher.readFChan
+    , LogReader.Watcher.getPing
     , delay
+    , showLogMap
     ) where
 
 import Prelude ()
@@ -36,7 +39,7 @@ import qualified Data.Aeson as AE
 import System.IO (hFlush, stdout)
 
 newtype LogChannel = LogChannel (TChan ChannelMessage)
-newtype DirChannel = DirChannel (TChan ChannelMessage)
+data DirChannel = DirChannel (TChan ChannelMessage) (TChan ChannelMessage)
 
 data LogFile = LogFile
     { _position :: !Integer
@@ -150,8 +153,9 @@ sendFileChanges Nothing _ = return ()
 tailFile :: TLogDirMap -> LogKey -> IO (Maybe (LogChannel), Maybe (DirChannel))
 tailFile tLogDirMap (LogKey (dir, fName)) = do
   logDirMap <- atomically $ readTVar tLogDirMap
-  fileChannel <- LogChannel <$> newBroadcastTChanIO
-  dirChannel <- DirChannel <$> newTChanIO
+  fileChannel <- LogChannel <$> newBroadcastTChanIO -- Channel for the watcher to send file updates
+  dirChannel <- DirChannel <$> newTChanIO <*> newBroadcastTChanIO
+
   updateTLogDirMap (openFile (LogKey (dir, fName)) dirChannel fileChannel) tLogDirMap
 
   case (logDirMap ^.at dir) of
@@ -170,22 +174,19 @@ tailFile tLogDirMap (LogKey (dir, fName)) = do
                  race_
                    (forever $ do
                       threadDelay delay
-      		      putStrLn "Sending ping"
-		      hFlush stdout
-                      atomically $ writeFChan fileChannel Ping
+                      hFlush stdout
+                      atomically $ pingDChan dirChannel Ping
                    )
                    (mainLoop tLogDirMap dir)
               )
         return ()
     Just _ -> return ()
 
-  putStrLn "Exiting tailFile"
-
   atomically $ do
     logDirMap <- readTVar tLogDirMap
-    let mDirChan = fmap (^. dirChan) $ logDirMap ^.at dir
 
-    mFileChan <- sequence $ fmap (dupTChan . (^. channel)) $ getLogFile (LogKey (dir, fName)) logDirMap
+    mDirChan <- sequence $ fmap (dupDChan . (^. dirChan)) $ logDirMap ^.at dir
+    mFileChan <- sequence $ fmap (dupFChan . (^. channel)) $ getLogFile (LogKey (dir, fName)) logDirMap
 
     return (mFileChan, mDirChan)
 
@@ -205,14 +206,10 @@ updateAction _ (Added _ _) = return ()
 updateAction _ (Removed _ _) = return ()
 updateAction tLogDirMap (Modified path _) = do
   logDirMap <- atomically $ readTVar tLogDirMap
-  putStrLn $ "File " <> pack path <> " was modified."
-  putStrLn $ "logDirMap " <> tshow logDirMap
-  hFlush stdout
   let logKey = toLogKey path
 
   case getLogFile logKey logDirMap of
     Nothing -> do
-      -- putStrLn $ "The file " <> pack path <> " is not currently being watched so nothing will happen."
       return ()
     Just logFile -> do
       withBinaryFile path ReadMode $ \handle -> do
@@ -233,7 +230,6 @@ writeChannel chan = do
   case mContents of
     Nothing -> return ()
     Just contents -> do
-       -- putStrLn $ "Writing " <> contents <> " to channel"
        liftIO $ atomically $ writeFChan chan (Data contents)
        writeChannel chan
 
@@ -260,7 +256,7 @@ fromLogKey (LogKey (DirPath dir, FileName fName)) = unpack dir </> unpack fName
 
 mainLoop :: TLogDirMap -> DirPath -> IO ()
 mainLoop tLogDirMap dir = do
-  putStrLn "Entered main loop"
+  putStrLn "Watcher.hs: entered mainLoop"
   hFlush stdout
   mAction <- atomically $ do
     logDirMap <- readTVar tLogDirMap
@@ -270,11 +266,12 @@ mainLoop tLogDirMap dir = do
         msg <- readDChan chan
         return $ Just msg
 
-  print mAction
-  hFlush stdout
+  liftIO $ do
+    print mAction
+    hFlush stdout
   case mAction of
     Nothing -> do
-      putStrLn "Exiting main loop"
+      putStrLn "Watcher.hs: Exiting mainLoop"
       hFlush stdout
       return ()
     Just (Closed logKey) -> do
@@ -286,42 +283,58 @@ tryReadFChan :: LogChannel -> STM (Maybe ChannelMessage)
 tryReadFChan (LogChannel chan) = CP.tryReadTChan chan
 
 tryReadDChan :: DirChannel -> STM (Maybe ChannelMessage)
-tryReadDChan (DirChannel chan) = tryReadFChan $ LogChannel chan
+tryReadDChan (DirChannel _ chan) = tryReadFChan $ LogChannel chan
 
-dupTChan :: LogChannel -> STM (LogChannel)
-dupTChan (LogChannel chan) = LogChannel <$> CP.dupTChan chan
+dupFChan :: LogChannel -> STM (LogChannel)
+dupFChan (LogChannel chan) = LogChannel <$> CP.dupTChan chan
 
-test :: IO ()
-test = do
-  let path = "E:\\Temp\\server.log"
+dupDChan :: DirChannel -> STM (DirChannel)
+dupDChan (DirChannel wChan bChan) = DirChannel wChan <$> CP.dupTChan bChan
 
-  tLogDirMap <- atomically $ newTVar mempty
-  (Just rChan, Just wChan) <- tailFile tLogDirMap (toLogKey path)
-  threadDelay $ truncate 2e6
+-- test :: IO ()
+-- test = do
+--   let path = "E:\\Temp\\server.log"
 
-  logDirMap <- atomically $ readTVar tLogDirMap
-  print logDirMap
+--   tLogDirMap <- atomically $ newTVar mempty
+--   (Just rChan, Just wChan) <- tailFile tLogDirMap (toLogKey path)
+--   threadDelay $ truncate 2e6
 
-  result <- atomically $ readFChan rChan
-  print result
+--   logDirMap <- atomically $ readTVar tLogDirMap
+--   print logDirMap
 
-  putStrLn "Sending close"
-  atomically $ writeDChan wChan $ Closed (toLogKey path)
+--   result <- atomically $ readFChan rChan
+--   print result
 
-  threadDelay $ truncate 20e6
-  logDirMap <- atomically $ readTVar tLogDirMap
-  print logDirMap
+--   putStrLn "Sending close"
+--   atomically $ writeDChan wChan $ Closed (toLogKey path)
+
+--   threadDelay $ truncate 20e6
+--   logDirMap <- atomically $ readTVar tLogDirMap
+--   print logDirMap
 
 writeFChan :: LogChannel -> ChannelMessage -> STM ()
 writeFChan (LogChannel chan) stuff =
     writeTChan chan stuff
 
+pingDChan :: DirChannel -> ChannelMessage -> STM ()
+pingDChan (DirChannel _ bChan) stuff =
+    writeFChan (LogChannel bChan) stuff
+
+getPing :: DirChannel -> STM ChannelMessage
+getPing (DirChannel _ rChan) = CP.readTChan rChan
+
 writeDChan :: DirChannel -> ChannelMessage -> STM ()
-writeDChan (DirChannel chan) stuff =
+writeDChan (DirChannel chan _) stuff =
     writeFChan (LogChannel chan) stuff
 
 readFChan :: LogChannel -> STM ChannelMessage
 readFChan (LogChannel chan) = CP.readTChan chan
 
 readDChan :: DirChannel -> STM ChannelMessage
-readDChan (DirChannel chan) = readFChan (LogChannel chan)
+readDChan (DirChannel chan _) = readFChan $ LogChannel chan
+
+showLogMap :: TLogDirMap -> IO Text
+showLogMap tLogDirMap = do
+  logDirMap <- atomically $ readTVar tLogDirMap
+  return $ tshow logDirMap
+

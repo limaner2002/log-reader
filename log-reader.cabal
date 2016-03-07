@@ -23,6 +23,9 @@ library
     else
         ghc-options:   -Wall -fwarn-tabs -O2
 
+    if os(windows)
+        cpp-options:   -DWINDOWS
+
     extensions: TemplateHaskell
                 QuasiQuotes
                 OverloadedStrings
@@ -57,3 +60,4 @@ library
                  , conduit
                  , yaml
                  , text
+                 , lifted-base
