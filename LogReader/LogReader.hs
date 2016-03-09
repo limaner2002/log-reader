@@ -45,18 +45,19 @@ getDirectoryContents dir settings = do
 
 getLogFilesR :: Yesod master => LogType -> HandlerT LogReader (HandlerT master IO) ()
 getLogFilesR logType =
-  withSettings $ \settings -> do
-    -- CC.sourceDirectoryDeep False "/tmp/" $$ CC.print
-    -- list <- LogFiles <$> getDirectoryContents logType settings
-    webSockets $ 
-      CC.sourceDirectoryDeep False (unpack $ getPath settings logType)
-         $$ CC.map (\x -> encode $ (pack x :: Text)) =$ sinkWSText
+    withSettings $ \settings -> do
+      let path = unpack $ getPath settings logType
+      -- CC.sourceDirectoryDeep False "/tmp/" $$ CC.print
+      -- list <- LogFiles <$> getDirectoryContents logType settings
+      webSockets $ 
+          CC.sourceDirectoryDeep False path
+             $$ CC.map (encode . stripPrefix path . pack) =$ sinkWSText
           -- $$ CC.foldMap (\x -> _)
           -- =$ CC.mapM_ (\x -> webSockets $ sendTextData $ encode x)
 
     -- webSockets $
     --    sendTextData $ encode list
-
+    
 
 getLogSocketR :: Yesod master => LogType -> Text -> HandlerT LogReader (HandlerT master IO) ()
 getLogSocketR logType logName =
