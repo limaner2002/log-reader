@@ -18,17 +18,13 @@ data LogReaderSettings = LogReaderSettings
     , tmpPath :: Text
     }
 
-data Directory = Directory Text
-data FilePath = FilePath Text
-data FileName = FileName Text
-
 data LogType = Application
              | JBoss
              | Tmp
                deriving (Show, Eq, Read)
 
-type FileMap = Map FileName FilePath
-type DirMap = Map Directory FileMap
+data Path = Directory
+          | File
 
 -- We have a familiar analogue from mkYesod, with just one extra parameter.
 -- We'll discuss that later.
@@ -46,10 +42,15 @@ data LogFiles = LogFiles
 
 $(deriveJSON defaultOptions{fieldLabelModifier = drop 0, constructorTagModifier = map C.toLower} ''LogFiles)
 $(deriveJSON defaultOptions{fieldLabelModifier = drop 0, constructorTagModifier = map C.toLower} ''LogReaderSettings)
+$(deriveJSON defaultOptions{fieldLabelModifier = drop 0, constructorTagModifier = map C.toLower} ''Path)
 
 readSettings :: IO (Either ParseException LogReaderSettings)
 readSettings =
     decodeFileEither "logSettings.yaml"
+
+-- toPath :: Text -> IO Path
+-- toPath path =
+    
 
 class GetPath a where
     getPath :: LogReaderSettings -> a -> Text

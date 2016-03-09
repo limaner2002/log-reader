@@ -21,6 +21,8 @@ import Data.Yaml hiding (encode)
 import qualified Data.Text as T
 import System.IO (hFlush, stdout)
 import Control.Exception.Lifted
+import qualified Data.Conduit.Combinators as CC
+import Data.Conduit
 
 withSettings f = do
   eSettings <- liftIO $ readSettings
@@ -44,9 +46,16 @@ getDirectoryContents dir settings = do
 getLogFilesR :: Yesod master => LogType -> HandlerT LogReader (HandlerT master IO) ()
 getLogFilesR logType =
   withSettings $ \settings -> do
-    list <- LogFiles <$> getDirectoryContents logType settings
-    webSockets $
-       sendTextData $ encode list
+    -- CC.sourceDirectoryDeep False "/tmp/" $$ CC.print
+    -- list <- LogFiles <$> getDirectoryContents logType settings
+    webSockets $ 
+      CC.sourceDirectoryDeep False (unpack $ getPath settings logType)
+         $$ CC.map (\x -> encode $ (pack x :: Text)) =$ sinkWSText
+          -- $$ CC.foldMap (\x -> _)
+          -- =$ CC.mapM_ (\x -> webSockets $ sendTextData $ encode x)
+
+    -- webSockets $
+    --    sendTextData $ encode list
 
 
 getLogSocketR :: Yesod master => LogType -> Text -> HandlerT LogReader (HandlerT master IO) ()
