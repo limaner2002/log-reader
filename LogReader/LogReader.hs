@@ -51,7 +51,12 @@ getLogFilesR logType =
       -- list <- LogFiles <$> getDirectoryContents logType settings
       webSockets $ 
           CC.sourceDirectoryDeep False path
-             $$ CC.map (encode . stripPrefix path . pack) =$ sinkWSText
+#ifdef WINDOWS
+             $$ CC.map (encode . stripPrefix (path <> "\\") . pack)
+#else
+             $$ CC.map (encode . stripPrefix path . pack)
+#endif
+             =$ sinkWSText
           -- $$ CC.foldMap (\x -> _)
           -- =$ CC.mapM_ (\x -> webSockets $ sendTextData $ encode x)
 
