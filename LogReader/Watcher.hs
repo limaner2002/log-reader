@@ -144,12 +144,6 @@ setFilePosition (LogKey (dir, fName)) pos = ix dir %~ (logFile %~ (ix fName %~ (
 getLogFile :: LogKey -> LogDirMap -> Maybe LogFile
 getLogFile (LogKey (dir, fName)) logDirMap = ((^.logFile) <$> (^.at dir) logDirMap) >>= (^.at fName)
 
-sendFileChanges :: Maybe (STM (TChan Text)) -> Text -> IO ()
-sendFileChanges (Just stmChan) changes = atomically go
-    where
-      go = stmChan >>= \chan -> writeTChan chan changes
-sendFileChanges Nothing _ = return ()
-
 tailFile :: TLogDirMap -> LogKey -> IO (Maybe (LogChannel), Maybe (DirChannel))
 tailFile tLogDirMap (LogKey (dir, fName)) = do
   logDirMap <- atomically $ readTVar tLogDirMap
@@ -160,21 +154,21 @@ tailFile tLogDirMap (LogKey (dir, fName)) = do
 
   case (logDirMap ^.at dir) of
     Nothing -> do
-        let conf = defaultConfig { confUsePolling = True
+        let conf = defaultConfig { confUsePolling = False
                                  , confPollInterval = pollingInterval
                                  }
-        _ <- async (
+        _ <- async ( do
                withManagerConf conf $ \mgr -> do
                  _ <- watchDir
                         mgr
                         (getPath dir)
                         (const True)
                         (updateAction tLogDirMap)
-                 moveToEndOfFile (LogKey (dir, fName)) tLogDirMap
+                 moveToEndOfFile (LogKey (dir, fName)) tLogDirMap 0
+                 sendContents (LogKey (dir, fName)) tLogDirMap
                  race_
                    (forever $ do
                       threadDelay delay
-                      hFlush stdout
                       atomically $ pingDChan dirChannel Ping
                    )
                    (mainLoop tLogDirMap dir)
@@ -190,13 +184,17 @@ tailFile tLogDirMap (LogKey (dir, fName)) = do
 
     return (mFileChan, mDirChan)
 
-moveToEndOfFile :: LogKey -> TLogDirMap -> IO ()
-moveToEndOfFile logKey tLogDirMap =
+moveToEndOfFile :: LogKey -> TLogDirMap -> Integer -> IO ()
+moveToEndOfFile logKey tLogDirMap offset =
     withBinaryFile path ReadMode $ \handle -> do
       size <- hFileSize handle
-      updateTLogDirMap (setFilePosition logKey size) tLogDirMap
+      putStrLn $ "New position: " <> tshow (position size)
+      updateTLogDirMap (setFilePosition logKey (position size)) tLogDirMap
   where
     path = fromLogKey logKey
+    position size
+        | offset >= size = size
+        | otherwise = size - offset
 
 getPath :: DirPath -> FilePath
 getPath (DirPath path) = unpack path
@@ -205,14 +203,21 @@ updateAction :: TLogDirMap -> Event -> IO ()
 updateAction _ (Added _ _) = return ()
 updateAction _ (Removed _ _) = return ()
 updateAction tLogDirMap (Modified path _) = do
-  logDirMap <- atomically $ readTVar tLogDirMap
+  putStrLn $ "File " <> pack path <> " modified"
+  hFlush stdout
   let logKey = toLogKey path
+  sendContents logKey tLogDirMap
 
+sendContents logKey tLogDirMap = do
+  putStrLn "Sending file contents"
+  hFlush stdout
+  logDirMap <- atomically $ readTVar tLogDirMap
   case getLogFile logKey logDirMap of
     Nothing -> do
+      putStrLn "Not sending contens"
       return ()
     Just logFile -> do
-      withBinaryFile path ReadMode $ \handle -> do
+      withBinaryFile (fromLogKey logKey) ReadMode $ \handle -> do
           size <- hFileSize handle
           if size < (logFile ^. position)
             then                  -- The file just rolled over or was
@@ -256,8 +261,6 @@ fromLogKey (LogKey (DirPath dir, FileName fName)) = unpack dir </> unpack fName
 
 mainLoop :: TLogDirMap -> DirPath -> IO ()
 mainLoop tLogDirMap dir = do
-  putStrLn "Watcher.hs: entered mainLoop"
-  hFlush stdout
   mAction <- atomically $ do
     logDirMap <- readTVar tLogDirMap
     case fmap (^. dirChan) $ logDirMap ^.at dir of
@@ -266,14 +269,8 @@ mainLoop tLogDirMap dir = do
         msg <- readDChan chan
         return $ Just msg
 
-  liftIO $ do
-    print mAction
-    hFlush stdout
   case mAction of
-    Nothing -> do
-      putStrLn "Watcher.hs: Exiting mainLoop"
-      hFlush stdout
-      return ()
+    Nothing -> return ()
     Just (Closed logKey) -> do
           atomically $ modifyTVar tLogDirMap (closeFile logKey)
           mainLoop tLogDirMap dir
@@ -290,27 +287,6 @@ dupFChan (LogChannel chan) = LogChannel <$> CP.dupTChan chan
 
 dupDChan :: DirChannel -> STM (DirChannel)
 dupDChan (DirChannel wChan bChan) = DirChannel wChan <$> CP.dupTChan bChan
-
--- test :: IO ()
--- test = do
---   let path = "E:\\Temp\\server.log"
-
---   tLogDirMap <- atomically $ newTVar mempty
---   (Just rChan, Just wChan) <- tailFile tLogDirMap (toLogKey path)
---   threadDelay $ truncate 2e6
-
---   logDirMap <- atomically $ readTVar tLogDirMap
---   print logDirMap
-
---   result <- atomically $ readFChan rChan
---   print result
-
---   putStrLn "Sending close"
---   atomically $ writeDChan wChan $ Closed (toLogKey path)
-
---   threadDelay $ truncate 20e6
---   logDirMap <- atomically $ readTVar tLogDirMap
---   print logDirMap
 
 writeFChan :: LogChannel -> ChannelMessage -> STM ()
 writeFChan (LogChannel chan) stuff =
@@ -338,3 +314,23 @@ showLogMap tLogDirMap = do
   logDirMap <- atomically $ readTVar tLogDirMap
   return $ tshow logDirMap
 
+test :: IO ()
+test = do
+  let path = "/private/tmp/server.log"
+
+  tLogDirMap <- atomically $ newTVar mempty
+  (Just rChan, Just wChan) <- tailFile tLogDirMap (toLogKey path)
+  threadDelay $ truncate 20e6
+
+  logDirMap <- atomically $ readTVar tLogDirMap
+  print logDirMap
+
+  result <- atomically $ readFChan rChan
+  print result
+
+  putStrLn "Sending close"
+  atomically $ writeDChan wChan $ Closed (toLogKey path)
+
+  threadDelay $ truncate 20e6
+  logDirMap <- atomically $ readTVar tLogDirMap
+  print logDirMap

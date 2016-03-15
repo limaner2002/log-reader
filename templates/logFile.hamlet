@@ -1,0 +1,4 @@
+<button .btn .btn-danger onclick="clearLogOutput()" #clearLog>
+    Clear Log File
+<div #output>
+    <p #log>

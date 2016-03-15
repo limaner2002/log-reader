@@ -23,6 +23,8 @@ import System.IO (hFlush, stdout)
 import Control.Exception.Lifted
 import qualified Data.Conduit.Combinators as CC
 import Data.Conduit
+import Yesod.Default.Util (widgetFileNoReload)
+import Text.Julius (rawJS)
 
 withSettings f = do
   eSettings <- liftIO $ readSettings
@@ -47,8 +49,6 @@ getLogFilesR :: Yesod master => LogType -> HandlerT LogReader (HandlerT master I
 getLogFilesR logType =
     withSettings $ \settings -> do
       let path = unpack $ getPath settings logType
-      -- CC.sourceDirectoryDeep False "/tmp/" $$ CC.print
-      -- list <- LogFiles <$> getDirectoryContents logType settings
       webSockets $ 
           CC.sourceDirectoryDeep False path
 #ifdef WINDOWS
@@ -57,19 +57,13 @@ getLogFilesR logType =
              $$ CC.map (encode . stripPrefix path . pack)
 #endif
              =$ sinkWSText
-          -- $$ CC.foldMap (\x -> _)
-          -- =$ CC.mapM_ (\x -> webSockets $ sendTextData $ encode x)
-
-    -- webSockets $
-    --    sendTextData $ encode list
     
 
-getLogSocketR :: Yesod master => LogType -> Text -> HandlerT LogReader (HandlerT master IO) ()
+getLogSocketR :: Yesod master => LogType -> Text -> HandlerT LogReader (HandlerT master IO) Html
 getLogSocketR logType logName =
   withSettings $ \settings -> do
     let logKey = toLogKey' (getPath settings logType) logName
 
-    -- checkExists logKey $ do
     (LogReader tLogDirMap) <- getYesod
     webSockets $ bracket
                  (liftIO $ checkExists logKey $ tailFile tLogDirMap logKey)
@@ -81,6 +75,7 @@ getLogSocketR logType logName =
                  (\(logChan, dirChan) ->
                     race_ (sendLoop $ fileUpdates logChan) (sendLoop $ checkConnection dirChan)
                  )
+    lift $ defaultLayout $(widgetFileNoReload def "logFile")
 
 getLogDownloadR :: Yesod master => LogType -> Text -> HandlerT LogReader (HandlerT master IO) TypedContent
 getLogDownloadR logType logName = withSettings $ \settings ->

@@ -1,0 +1,34 @@
+var p = document.getElementById("log"),
+    uri = document.URL,
+    uri = uri.replace("http:", "ws:").replace("https:", "wss:"),
+    output = document.getElementById("output"),
+    conn;
+
+output.appendChild(p);
+console.log("Openining up a new websocket");
+conn = new WebSocket(uri),
+conn.onmessage = function(e) {
+    var msg = JSON.parse(e.data)
+    if(msg.type == "Data"){
+	var lines = msg.contents.split("\n"),
+	    line;
+	for (var i = 0; i < lines.length; i++){
+    	    line = lines[i];
+    	    if(line.length > 0){
+    		p.appendChild(document.createTextNode(line));
+    		p.appendChild(document.createElement("br"));
+    	    }
+	}
+    }
+};
+
+function clearLogOutput() {
+    var logOutput = document.getElementById("log");
+    console.log("logOutput: " + logOutput);
+    console.log("children: " + logOutput.childNodes[0]);
+    while(logOutput.lastChild){
+	logOutput.removeChild(logOutput.lastChild);
+	console.log("removed last child");
+    }
+    console.log("Clicked?");
+}
