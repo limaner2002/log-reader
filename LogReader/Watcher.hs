@@ -154,7 +154,7 @@ tailFile tLogDirMap (LogKey (dir, fName)) = do
 
   case (logDirMap ^.at dir) of
     Nothing -> do
-        let conf = defaultConfig { confUsePolling = False
+        let conf = defaultConfig { confUsePolling = True
                                  , confPollInterval = pollingInterval
                                  }
         _ <- async ( do

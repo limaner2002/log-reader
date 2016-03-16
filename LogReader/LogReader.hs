@@ -48,7 +48,7 @@ getDirectoryContents dir settings = do
 getLogFilesR :: Yesod master => LogType -> HandlerT LogReader (HandlerT master IO) ()
 getLogFilesR logType =
     withSettings $ \settings -> do
-      let path = unpack $ getPath settings logType
+      let path = unpack $ getPath settings logType <> "/"
       webSockets $ 
           CC.sourceDirectoryDeep False path
 #ifdef WINDOWS
