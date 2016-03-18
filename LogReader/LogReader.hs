@@ -26,28 +26,28 @@ import Data.Conduit
 import Yesod.Default.Util (widgetFileNoReload)
 import Text.Julius (rawJS)
 
-withSettings f = do
-  eSettings <- liftIO $ readSettings
-  case eSettings of
-    Left exception ->
-        error $ prettyPrintParseException exception
-    Right (LogReaderSettings jboss application tmp) ->
-#ifdef WINDOWS
-        f $ LogReaderSettings (rep jboss) (rep application) (rep tmp)
-      where
-	rep = T.replace "/" "\\"
-#else
-        f $ LogReaderSettings jboss application tmp
-#endif
+-- withSettings f = do
+--   eSettings <- liftIO $ readSettings
+--   case eSettings of
+--     Left exception ->
+--         error $ prettyPrintParseException exception
+--     Right (LogReaderSettings jboss application tmp) ->
+-- #ifdef WINDOWS
+--         f $ LogReaderSettings (rep jboss) (rep application) (rep tmp)
+--       where
+-- 	rep = T.replace "/" "\\"
+-- #else
+--         f $ LogReaderSettings jboss application tmp
+-- #endif
 
-getDirectoryContents :: (GetPath dir, MonadHandler site) => dir -> LogReaderSettings -> site [Text]
+getDirectoryContents :: (GetPath dir, MonadHandler site) => dir -> Settings -> site [Text]
 getDirectoryContents dir settings = do
   contents <- liftIO $ SysDir.getDirectoryContents $ unpack $ getPath settings dir
   return $ map pack $ filter (\x -> not $ x `elem` [".", ".."]) contents
 
 getLogFilesR :: Yesod master => LogType -> HandlerT LogReader (HandlerT master IO) ()
 getLogFilesR logType =
-    withSettings $ \settings -> do
+    withSettings "settings.conf" $ \settings -> do
       let path = unpack $ getPath settings logType <> "/"
       webSockets $ 
           CC.sourceDirectoryDeep False path
@@ -61,7 +61,7 @@ getLogFilesR logType =
 
 getLogSocketR :: Yesod master => LogType -> Text -> HandlerT LogReader (HandlerT master IO) Html
 getLogSocketR logType logName =
-  withSettings $ \settings -> do
+  withSettings "settings.conf" $ \settings -> do
     let logKey = toLogKey' (getPath settings logType) logName
 
     (LogReader tLogDirMap) <- getYesod
@@ -78,7 +78,7 @@ getLogSocketR logType logName =
     lift $ defaultLayout $(widgetFileNoReload def "logFile")
 
 getLogDownloadR :: Yesod master => LogType -> Text -> HandlerT LogReader (HandlerT master IO) TypedContent
-getLogDownloadR logType logName = withSettings $ \settings ->
+getLogDownloadR logType logName = withSettings "settings.conf" $ \settings ->
     sendFile typePlain $ fromLogKey (logKey settings)
   where
     logKey settings = toLogKey' (getPath settings logType) logName

@@ -62,3 +62,4 @@ library
                  , text
                  , lifted-base
                  , shakespeare
+                 , suite-settings
