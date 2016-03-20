@@ -12,7 +12,7 @@ module LogReader.LogReader
 
 import           LogReader.Data
 import           Yesod
-import           ClassyPrelude.Yesod -- hiding (writeChan, readChan)
+import           ClassyPrelude.Yesod hiding ((</>))
 import qualified System.Directory as SysDir
 import Data.Aeson (encode)
 import Yesod.WebSockets
@@ -42,15 +42,15 @@ import Text.Julius (rawJS)
 
 getDirectoryContents :: (GetPath dir, MonadHandler site) => dir -> Settings -> site [Text]
 getDirectoryContents dir settings = do
-  contents <- liftIO $ SysDir.getDirectoryContents $ unpack $ getPath settings dir
+  contents <- liftIO $ SysDir.getDirectoryContents $ fromAbsDir $ getPath settings dir
   return $ map pack $ filter (\x -> not $ x `elem` [".", ".."]) contents
 
 getLogFilesR :: Yesod master => LogType -> HandlerT LogReader (HandlerT master IO) ()
 getLogFilesR logType =
     withSettings "settings.conf" $ \settings -> do
-      let path = unpack $ getPath settings logType <> "/"
+      let path = pack $ fromAbsDir $ getPath settings logType :: Text
       webSockets $ 
-          CC.sourceDirectoryDeep False path
+          CC.sourceDirectoryDeep False (unpack path)
 #ifdef WINDOWS
              $$ CC.map (encode . stripPrefix (path <> "\\") . pack)
 #else
@@ -59,10 +59,10 @@ getLogFilesR logType =
              =$ sinkWSText
     
 
-getLogSocketR :: Yesod master => LogType -> Text -> HandlerT LogReader (HandlerT master IO) Html
+getLogSocketR :: Yesod master => LogType -> Path Rel File -> HandlerT LogReader (HandlerT master IO) Html
 getLogSocketR logType logName =
   withSettings "settings.conf" $ \settings -> do
-    let logKey = toLogKey' (getPath settings logType) logName
+    let logKey = toLogKey' $ (getPath settings logType) </> logName
 
     (LogReader tLogDirMap) <- getYesod
     webSockets $ bracket
@@ -77,11 +77,11 @@ getLogSocketR logType logName =
                  )
     lift $ defaultLayout $(widgetFileNoReload def "logFile")
 
-getLogDownloadR :: Yesod master => LogType -> Text -> HandlerT LogReader (HandlerT master IO) TypedContent
+getLogDownloadR :: Yesod master => LogType -> (Path Rel File) -> HandlerT LogReader (HandlerT master IO) TypedContent
 getLogDownloadR logType logName = withSettings "settings.conf" $ \settings ->
     sendFile typePlain $ fromLogKey (logKey settings)
   where
-    logKey settings = toLogKey' (getPath settings logType) logName
+    logKey settings = toLogKey' $ (getPath settings logType) </> logName
 
 checkExists logKey f = do
     exists <- SysDir.doesFileExist (fromLogKey logKey)

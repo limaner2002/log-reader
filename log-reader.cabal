@@ -63,3 +63,4 @@ library
                  , lifted-base
                  , shakespeare
                  , suite-settings
+                 , path
