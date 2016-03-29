@@ -155,7 +155,7 @@ tailFile tLogDirMap (LogKey (dir, fName)) = do
 
   case (logDirMap ^.at dir) of
     Nothing -> do
-        let conf = defaultConfig { confUsePolling = False
+        let conf = defaultConfig { confUsePolling = True
                                  , confPollInterval = pollingInterval
                                  }
         _ <- async ( do
@@ -166,7 +166,6 @@ tailFile tLogDirMap (LogKey (dir, fName)) = do
                         (const True)
                         (updateAction tLogDirMap)
                  moveToEndOfFile (LogKey (dir, fName)) tLogDirMap 0
-                 sendContents (LogKey (dir, fName)) tLogDirMap
                  race_
                    (forever $ do
                       threadDelay delay
@@ -189,7 +188,6 @@ moveToEndOfFile :: LogKey -> TLogDirMap -> Integer -> IO ()
 moveToEndOfFile logKey tLogDirMap offset =
     withBinaryFile path ReadMode $ \handle -> do
       size <- hFileSize handle
-      putStrLn $ "New position: " <> tshow (position size)
       updateTLogDirMap (setFilePosition logKey (position size)) tLogDirMap
   where
     path = fromLogKey logKey
@@ -201,19 +199,13 @@ updateAction :: TLogDirMap -> Event -> IO ()
 updateAction _ (Added _ _) = return ()
 updateAction _ (Removed _ _) = return ()
 updateAction tLogDirMap (Modified path _) = do
-  putStrLn $ "File " <> pack path <> " modified"
-  hFlush stdout
   logKey <- toLogKey path
   sendContents logKey tLogDirMap
 
 sendContents logKey tLogDirMap = do
-  putStrLn "Sending file contents"
-  hFlush stdout
   logDirMap <- atomically $ readTVar tLogDirMap
   case getLogFile logKey logDirMap of
-    Nothing -> do
-      putStrLn $ "logKey " <> tshow logKey <> "not found. Not sending contens"
-      return ()
+    Nothing -> return ()
     Just logFile -> do
       withBinaryFile (fromLogKey logKey) ReadMode $ \handle -> do
           size <- hFileSize handle
@@ -331,3 +323,4 @@ test = do
   threadDelay $ truncate 20e6
   logDirMap <- atomically $ readTVar tLogDirMap
   print logDirMap
+

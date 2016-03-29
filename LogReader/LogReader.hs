@@ -19,26 +19,14 @@ import Yesod.WebSockets
 import LogReader.Watcher
 import Data.Yaml hiding (encode)
 import qualified Data.Text as T
-import System.IO (hFlush, stdout)
+import System.IO (hFlush, stdout, openFile)
 import Control.Exception.Lifted
 import qualified Data.Conduit.Combinators as CC
 import Data.Conduit
 import Yesod.Default.Util (widgetFileNoReload)
 import Text.Julius (rawJS)
 
--- withSettings f = do
---   eSettings <- liftIO $ readSettings
---   case eSettings of
---     Left exception ->
---         error $ prettyPrintParseException exception
---     Right (LogReaderSettings jboss application tmp) ->
--- #ifdef WINDOWS
---         f $ LogReaderSettings (rep jboss) (rep application) (rep tmp)
---       where
--- 	rep = T.replace "/" "\\"
--- #else
---         f $ LogReaderSettings jboss application tmp
--- #endif
+import System.IO (withBinaryFile, hFileSize, hSeek, IOMode(..), SeekMode(..))
 
 getDirectoryContents :: (GetPath dir, MonadHandler site) => dir -> Settings -> site [Text]
 getDirectoryContents dir settings = do
@@ -51,11 +39,7 @@ getLogFilesR logType =
       let path = pack $ fromAbsDir $ getPath settings logType :: Text
       webSockets $ 
           CC.sourceDirectoryDeep False (unpack path)
-#ifdef WINDOWS
-             $$ CC.map (encode . stripPrefix (path <> "\\") . pack)
-#else
              $$ CC.map (encode . stripPrefix path . pack)
-#endif
              =$ sinkWSText
     
 
@@ -65,16 +49,20 @@ getLogSocketR logType logName =
     let logKey = toLogKey' $ (getPath settings logType) </> logName
 
     (LogReader tLogDirMap) <- getYesod
-    webSockets $ bracket
-                 (liftIO $ checkExists logKey $ tailFile tLogDirMap logKey)
-                 (\(_, Just wChan) -> liftIO $ do
+    webSockets $ do
+      readLastNBytes logKey 2048
+
+      bracket
+          (liftIO $ checkExists logKey $ tailFile tLogDirMap logKey)
+          (\(_, Just wChan) -> liftIO $ do
                     putStrLn $ "Sending Close " <> tshow logKey
                     hFlush stdout
                     atomically $ writeDChan wChan $ Closed logKey
-                 )
-                 (\(logChan, dirChan) ->
+          )
+          (\(logChan, dirChan) ->
                     race_ (sendLoop $ fileUpdates logChan) (sendLoop $ checkConnection dirChan)
-                 )
+          )
+
     lift $ defaultLayout $(widgetFileNoReload def "logFile")
 
 getLogDownloadR :: Yesod master => LogType -> (Path Rel File) -> HandlerT LogReader (HandlerT master IO) TypedContent
@@ -123,6 +111,20 @@ checkConnection Nothing = error "No dir channel?"
 checkConnection (Just chan) = do
   msg <- liftIO $ atomically $ getPing chan
   sendTextDataE $ encode msg
+
+readLastNBytes :: (MonadIO m, MonadResource m)
+               => LogKey
+               -> Integer
+               -> WebSocketsT m ()
+readLastNBytes logKey n = 
+  sourceIOHandle
+      ( do
+            putStrLn $ "Sending last " <> tshow n <> " bytes"
+            handle <- openFile (fromLogKey logKey) ReadMode
+            size <- hFileSize handle
+            hSeek handle AbsoluteSeek (max 0 (size - n))
+            return handle
+      ) $$ CC.map (encode . Data . dropWhile (\c -> c /= '\n' && c /= '\r')) =$ sinkWSText
 
 instance (Yesod master) => YesodSubDispatch LogReader (HandlerT master IO) where
     yesodSubDispatch = $(mkYesodSubDispatch resourcesLogReader)
