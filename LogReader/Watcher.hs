@@ -28,7 +28,7 @@ import Control.Lens
 import Data.Map.Lens
 import qualified Data.Map as M
 import System.FSNotify
-import Control.Concurrent (threadDelay)
+-- import Control.Concurrent (threadDelay)
 import System.IO (withBinaryFile, hFileSize, hSeek, IOMode(..), SeekMode(..))
 --import System.FilePath (takeDirectory, takeFileName)
 import Data.Conduit

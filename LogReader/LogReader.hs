@@ -28,11 +28,6 @@ import Text.Julius (rawJS)
 
 import System.IO (withBinaryFile, hFileSize, hSeek, IOMode(..), SeekMode(..))
 
-getDirectoryContents :: (GetPath dir, MonadHandler site) => dir -> Settings -> site [Text]
-getDirectoryContents dir settings = do
-  contents <- liftIO $ SysDir.getDirectoryContents $ fromAbsDir $ getPath settings dir
-  return $ map pack $ filter (\x -> not $ x `elem` [".", ".."]) contents
-
 getLogFilesR :: Yesod master => LogType -> HandlerT LogReader (HandlerT master IO) ()
 getLogFilesR logType =
     withSettings "settings.conf" $ \settings -> do

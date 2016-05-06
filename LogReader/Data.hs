@@ -37,25 +37,10 @@ type LogFilePath = Path Rel File
 
 instance PathMultiPiece (Path Rel File) where
     fromPathMultiPiece pieces = (parseRelFile . unpack) $ intercalate "/" pieces
---         case tryAny $ (parseRelFile . unpack) $ intercalate "/" pieces of
---           Left _ -> Nothing
---           Right path -> Just path
 
     toPathMultiPiece = splitElem '/' . pack . fromRelFile
 
 instance Read LogFilePath where
-
--- type LogDirPath = Path Abs Dir
-
--- instance PathMultiPiece (Path Abs Dir) where
---     fromPathMultiPiece pieces = (parseAbsDir . unpack) $ intercalate "/" pieces
--- --         case tryAny $ (parseRelFile . unpack) $ intercalate "/" pieces of
--- --           Left _ -> Nothing
--- --           Right path -> Just path
-
---     toPathMultiPiece = splitElem '/' . pack . fromAbsDir
-
--- instance Read LogDirPath where
 
 -- We have a familiar analogue from mkYesod, with just one extra parameter.
 -- We'll discuss that later.
@@ -72,14 +57,6 @@ data LogFiles = LogFiles
   deriving (Show, Eq)
 
 $(deriveJSON defaultOptions{fieldLabelModifier = drop 0, constructorTagModifier = map C.toLower} ''LogFiles)
-
--- readSettings :: IO (Either ParseException LogReaderSettings)
--- readSettings =
---     decodeFileEither "logSettings.yaml"
-
--- toPath :: Text -> IO Path
--- toPath path =
-    
 
 class GetPath a where
     getPath :: Settings -> a -> Path Abs Dir
