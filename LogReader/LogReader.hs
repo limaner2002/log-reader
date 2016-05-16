@@ -30,7 +30,7 @@ import System.IO (withBinaryFile, hFileSize, hSeek, IOMode(..), SeekMode(..))
 
 getLogFilesR :: Yesod master => LogType -> HandlerT LogReader (HandlerT master IO) ()
 getLogFilesR logType =
-    withSettings "settings.conf" $ \settings -> do
+    withSettings loadSettings "settings.conf" $ \settings -> do
       let path = pack $ fromAbsDir $ getPath settings logType :: Text
       webSockets $ 
           CC.sourceDirectoryDeep False (unpack path)
@@ -40,7 +40,7 @@ getLogFilesR logType =
 
 getLogSocketR :: Yesod master => LogType -> Path Rel File -> HandlerT LogReader (HandlerT master IO) Html
 getLogSocketR logType logName =
-  withSettings "settings.conf" $ \settings -> do
+  withSettings loadSettings "settings.conf" $ \settings -> do
     let logKey = toLogKey' $ (getPath settings logType) </> logName
 
     (LogReader tLogDirMap) <- getYesod
@@ -61,7 +61,7 @@ getLogSocketR logType logName =
     lift $ defaultLayout $(widgetFileNoReload def "logFile")
 
 getLogDownloadR :: Yesod master => LogType -> (Path Rel File) -> HandlerT LogReader (HandlerT master IO) TypedContent
-getLogDownloadR logType logName = withSettings "settings.conf" $ \settings ->
+getLogDownloadR logType logName = withSettings loadSettings "settings.conf" $ \settings ->
     sendFile typePlain $ fromLogKey (logKey settings)
   where
     logKey settings = toLogKey' $ (getPath settings logType) </> logName
